@@ -1,132 +1,121 @@
-// server.js - Main server file for Socket.io chat application
-
-const express = require('express');
-const http = require('http');
-const { Server } = require('socket.io');
-const cors = require('cors');
-const dotenv = require('dotenv');
-const path = require('path');
+import compression from 'compression';
+import cors from 'cors';
+import dotenv from 'dotenv';
+import express from 'express';
+import helmet from 'helmet';
+import http from 'http';
+import morgan from 'morgan';
+import path from 'path';
+import { Server } from 'socket.io';
+import { fileURLToPath } from 'url';
 
 // Load environment variables
 dotenv.config();
 
+// Import configurations
+import corsConfig from './config/cors.js';
+import connectDB from './config/database.js';
+import socketConfig from './config/socket.js';
+
+// Import routes
+import apiRoutes from './routes/index.js';
+
+// Import middleware
+import { errorHandler } from './middleware/errorHandler.js';
+import { apiLimiter, authLimiter, devLimiter } from './middleware/rateLimiter.js';
+
+// Import socket handlers
+import { setupSocketHandlers } from './socket/index.js';
+import socketAuth from './socket/middleware/authSocket.js';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
 // Initialize Express app
 const app = express();
 const server = http.createServer(app);
-const io = new Server(server, {
-  cors: {
-    origin: process.env.CLIENT_URL || 'http://localhost:5173',
-    methods: ['GET', 'POST'],
-    credentials: true,
-  },
-});
 
-// Middleware
-app.use(cors());
-app.use(express.json());
-app.use(express.static(path.join(__dirname, 'public')));
+// Socket.io configuration
+const io = new Server(server, socketConfig);
 
-// Store connected users and messages
-const users = {};
-const messages = [];
-const typingUsers = {};
+// Connect to database
+connectDB();
 
-// Socket.io connection handler
-io.on('connection', (socket) => {
-  console.log(`User connected: ${socket.id}`);
+// Security middleware
+app.use(helmet({
+  crossOriginResourcePolicy: { policy: "cross-origin" }
+}));
+app.use(compression());
+app.use(morgan('combined'));
 
-  // Handle user joining
-  socket.on('user_join', (username) => {
-    users[socket.id] = { username, id: socket.id };
-    io.emit('user_list', Object.values(users));
-    io.emit('user_joined', { username, id: socket.id });
-    console.log(`${username} joined the chat`);
-  });
+// Apply rate limiting based on environment
+if (process.env.NODE_ENV === 'production') {
+  app.use('/api/', apiLimiter);
+  app.use('/api/auth/', authLimiter);
+} else {
+  app.use('/api/', devLimiter);
+}
 
-  // Handle chat messages
-  socket.on('send_message', (messageData) => {
-    const message = {
-      ...messageData,
-      id: Date.now(),
-      sender: users[socket.id]?.username || 'Anonymous',
-      senderId: socket.id,
-      timestamp: new Date().toISOString(),
-    };
-    
-    messages.push(message);
-    
-    // Limit stored messages to prevent memory issues
-    if (messages.length > 100) {
-      messages.shift();
-    }
-    
-    io.emit('receive_message', message);
-  });
+// CORS configuration - MUST come before routes
+app.use(cors(corsConfig));
 
-  // Handle typing indicator
-  socket.on('typing', (isTyping) => {
-    if (users[socket.id]) {
-      const username = users[socket.id].username;
-      
-      if (isTyping) {
-        typingUsers[socket.id] = username;
-      } else {
-        delete typingUsers[socket.id];
-      }
-      
-      io.emit('typing_users', Object.values(typingUsers));
-    }
-  });
+// Handle preflight requests
+app.options('*', cors(corsConfig));
 
-  // Handle private messages
-  socket.on('private_message', ({ to, message }) => {
-    const messageData = {
-      id: Date.now(),
-      sender: users[socket.id]?.username || 'Anonymous',
-      senderId: socket.id,
-      message,
-      timestamp: new Date().toISOString(),
-      isPrivate: true,
-    };
-    
-    socket.to(to).emit('private_message', messageData);
-    socket.emit('private_message', messageData);
-  });
+// Body parsing middleware
+app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ extended: true }));
 
-  // Handle disconnection
-  socket.on('disconnect', () => {
-    if (users[socket.id]) {
-      const { username } = users[socket.id];
-      io.emit('user_left', { username, id: socket.id });
-      console.log(`${username} left the chat`);
-    }
-    
-    delete users[socket.id];
-    delete typingUsers[socket.id];
-    
-    io.emit('user_list', Object.values(users));
-    io.emit('typing_users', Object.values(typingUsers));
-  });
-});
+// Serve static files
+app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
 // API routes
-app.get('/api/messages', (req, res) => {
-  res.json(messages);
+app.use('/api', apiRoutes);
+
+// Socket.io middleware
+io.use(socketAuth);
+
+// Setup socket handlers
+setupSocketHandlers(io);
+
+// Health check endpoint
+app.get('/health', (req, res) => {
+  res.status(200).json({
+    status: 'OK',
+    timestamp: new Date().toISOString(),
+    uptime: process.uptime(),
+    environment: process.env.NODE_ENV
+  });
 });
 
-app.get('/api/users', (req, res) => {
-  res.json(Object.values(users));
+// Test endpoint to verify CORS
+app.get('/api/test-cors', (req, res) => {
+  res.json({
+    success: true,
+    message: 'CORS is working!',
+    timestamp: new Date().toISOString()
+  });
 });
 
-// Root route
-app.get('/', (req, res) => {
-  res.send('Socket.io Chat Server is running');
-});
+// Serve client in production
+if (process.env.NODE_ENV === 'production') {
+  app.use(express.static(path.join(__dirname, '../client/dist')));
+  
+  app.get('*', (req, res) => {
+    res.sendFile(path.join(__dirname, '../client/dist/index.html'));
+  });
+}
+
+// Error handling middleware
+app.use(errorHandler);
 
 // Start server
-const PORT = process.env.PORT || 5000;
+const PORT = process.env.PORT || 5001;
 server.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
+  console.log(`🚀 Ongea server running on port ${PORT}`);
+  console.log(`📱 Client URL: ${process.env.CLIENT_URL}`);
+  console.log(`⚡ Environment: ${process.env.NODE_ENV}`);
+  console.log(`🔗 CORS enabled for: ${process.env.CLIENT_URL}`);
 });
 
-module.exports = { app, server, io }; 
+export { app, io, server };
