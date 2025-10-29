@@ -182,7 +182,6 @@ This project is a real-time chat application built using Socket.io, demonstratin
 
 ## 📸 Screenshots/GIFs
 ![Screenshot](screenshot.png)
-*(Add screenshots or GIFs of the application here to showcase its features)*
 
 ## 🚀 Deployment (Optional)
 *   **Server Deployment:**
