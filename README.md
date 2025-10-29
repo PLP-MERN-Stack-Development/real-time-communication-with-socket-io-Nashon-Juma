@@ -186,7 +186,7 @@ This project is a real-time chat application built using Socket.io, demonstratin
 ## 🚀 Deployment (Optional)
 *   **Server Deployment:**
     *   Deploy the server to a service like Render, Railway, or Heroku.
-    *   *(Add deployed server URL here)*
+    *   
 *   **Client Deployment:**
     *   Deploy the client to Vercel, Netlify, or GitHub Pages.
-    *   *(Add deployed client URL here)*
+    *   
